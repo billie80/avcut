@@ -36,6 +36,15 @@
 #define av_frame_free avcodec_free_frame
 #endif
 
+#if LIBAVCODEC_VERSION_INT < AV_VERSION_INT(56,56,0)
+#ifndef AV_CODEC_FLAG_GLOBAL_HEADER
+#define AV_CODEC_FLAG_GLOBAL_HEADER CODEC_FLAG_GLOBAL_HEADER
+#endif
+#ifndef AV_CODEC_CAP_DELAY
+#define AV_CODEC_CAP_DELAY CODEC_CAP_DELAY
+#endif
+#endif
+
 // buffer management struct for a stream
 struct packet_buffer {
 	unsigned int stream_index;
@@ -154,7 +163,7 @@ int encode_write_frame(struct project *pr, struct packet_buffer *s, AVFrame *fra
 		s->next_dts += enc_pkt.duration;
 		
 		// copy the header to the beginning of each key frame if we use a global header
-		if (ostream->codec->flags & CODEC_FLAG_GLOBAL_HEADER)
+		if (ostream->codec->flags & AV_CODEC_FLAG_GLOBAL_HEADER)
 			av_bitstream_filter_filter(pr->bsf_dump_extra, ostream->codec, NULL,
 				&enc_pkt.data, &enc_pkt.size, enc_pkt.data, enc_pkt.size,
 				enc_pkt.flags & AV_PKT_FLAG_KEY);
@@ -287,7 +296,7 @@ char find_packet_for_frame(struct project *pr, struct packet_buffer *s, size_t f
 			// libav is missing pkt_size
 			if (s->frames[frame_idx]->pkt_size != s->pkts[i].size - pr->size_diff) {
 				av_log(NULL, AV_LOG_ERROR,
-						"size mismatch %zu:%d %zu:%d (diff: %lu, try: )\n",
+						"size mismatch %zu:%d %zu:%d (diff: %lu, try: %d)\n",
 						frame_idx, s->frames[frame_idx]->pkt_size, i,
 						s->pkts[i].size, pr->size_diff,
 						s->pkts[i].size - s->frames[frame_idx]->pkt_size);
@@ -479,7 +488,7 @@ void flush_packet_buffer(struct project *pr, struct packet_buffer *s, char last_
 		}
 		
 		// if the encoder emits packets delayed in time, flush the encoder to receive all remaining packets in the queue
-		if (frame_written && pr->out_fctx->streams[s->stream_index]->codec->codec->capabilities & CODEC_CAP_DELAY) {
+		if (frame_written && pr->out_fctx->streams[s->stream_index]->codec->codec->capabilities & AV_CODEC_CAP_DELAY) {
 			av_log(NULL, AV_LOG_DEBUG, "Local flushing stream #%u\n", s->stream_index);
 			while (1) {
 				int got_frame;
@@ -794,16 +803,17 @@ void help() {
 	av_log(NULL, AV_LOG_INFO, "\n");
 	av_log(NULL, AV_LOG_INFO, "Options:\n");
 	av_log(NULL, AV_LOG_INFO, "\n");
-	av_log(NULL, AV_LOG_INFO, "  -c            Create a shell script to check the cutpoints with mpv\n");
-	av_log(NULL, AV_LOG_INFO, "  -d <diff>     Accept this difference in packet sizes during packet matching\n");
-	av_log(NULL, AV_LOG_INFO, "  -i <file>     Input file\n");
-	av_log(NULL, AV_LOG_INFO, "  -o <file>     Output file\n");
-	av_log(NULL, AV_LOG_INFO, "  -p <profile>  Use this encoding profile. If <profile> ends with \".profile\",\n");
-	av_log(NULL, AV_LOG_INFO, "                <profile> is used as a path to the profile file. If not, the profile\n");
-	av_log(NULL, AV_LOG_INFO, "                is loaded from the default profile directory:\n");
-	av_log(NULL, AV_LOG_INFO, "                   %s\n", AVCUT_PROFILE_DIRECTORY);
-	av_log(NULL, AV_LOG_INFO, "  -s <index>    Skip stream with this index\n");
-	av_log(NULL, AV_LOG_INFO, "  -v <level>    Set verbosity level (see https://www.ffmpeg.org/doxygen/2.8/log_8h.html)\n");
+	av_log(NULL, AV_LOG_INFO, "  -c              Create a shell script to check the cutpoints with mpv\n");
+	av_log(NULL, AV_LOG_INFO, "  -d <diff>       Accept this difference in packet sizes during packet matching\n");
+	av_log(NULL, AV_LOG_INFO, "  -f <framecount> provide the approximate total frame count to show progress information\n");
+	av_log(NULL, AV_LOG_INFO, "  -i <file>       Input file\n");
+	av_log(NULL, AV_LOG_INFO, "  -o <file>       Output file\n");
+	av_log(NULL, AV_LOG_INFO, "  -p <profile>    Use this encoding profile. If <profile> ends with \".profile\",\n");
+	av_log(NULL, AV_LOG_INFO, "                  <profile> is used as a path to the profile file. If not, the profile\n");
+	av_log(NULL, AV_LOG_INFO, "                  is loaded from the default profile directory:\n");
+	av_log(NULL, AV_LOG_INFO, "                    %s\n", AVCUT_PROFILE_DIRECTORY);
+	av_log(NULL, AV_LOG_INFO, "  -s <index>      Skip stream with this index\n");
+	av_log(NULL, AV_LOG_INFO, "  -v <level>      Set verbosity level (see https://www.ffmpeg.org/doxygen/2.8/log_8h.html)\n");
 	av_log(NULL, AV_LOG_INFO, "\n");
 	av_log(NULL, AV_LOG_INFO, "Besides the input and output file, avcut expects a \"blacklist\", i.e. what should\n");
 	av_log(NULL, AV_LOG_INFO, "be dropped, as argument. This blacklist consists of timestamps that denote from\n");
@@ -818,7 +828,7 @@ void help() {
 }
 
 int main(int argc, char **argv) {
-	unsigned int i, j, n_skip_streams;
+	unsigned int i, j, n_skip_streams, max_framecount;
 	unsigned int *skip_streams;
 	unsigned long size_diff;
 	int ret, opt, create_check_script;
@@ -834,7 +844,8 @@ int main(int argc, char **argv) {
 	outputf = 0;
 	profile = 0;
 	size_diff = 0;
-	while ((opt = getopt (argc, argv, "hi:o:p:v:cd:s:")) != -1) {
+	max_framecount=0;
+	while ((opt = getopt (argc, argv, "hi:o:p:v:cd:s:f:")) != -1) {
 		switch (opt) {
 			case 'h':
 				help();
@@ -853,6 +864,23 @@ int main(int argc, char **argv) {
 				break;
 			case 'c':
 				create_check_script = 1;
+				break;
+			case 'f':
+				{
+					char *end;
+
+					max_framecount = strtol(optarg, &end, 10);
+					if (end == optarg || *end != 0) {
+						av_log(NULL, AV_LOG_ERROR, "error while parsing size_diff: %s\n", optarg);
+						help();
+						return 1;
+					}
+					if (max_framecount == 0) {
+						av_log(NULL, AV_LOG_ERROR, "framecount must be greater than zero\n");
+						help();
+						return 1;
+					}
+				}
 				break;
 			case 'd':
 				{
@@ -1146,7 +1174,7 @@ int main(int argc, char **argv) {
 			out_stream->sample_aspect_ratio = pr->in_fctx->streams[i]->sample_aspect_ratio;
 			
 			if (pr->out_fctx->oformat->flags & AVFMT_GLOBALHEADER)
-				enc_cctx->flags |= CODEC_FLAG_GLOBAL_HEADER;
+				enc_cctx->flags |= AV_CODEC_FLAG_GLOBAL_HEADER;
 			
 			ret = avcodec_open2(enc_cctx, encoder, NULL);
 			if (ret < 0) {
@@ -1166,7 +1194,7 @@ int main(int argc, char **argv) {
 			enc_cctx->codec_tag = 0;
 			
 			if (pr->out_fctx->oformat->flags & AVFMT_GLOBALHEADER)
-				enc_cctx->flags |= CODEC_FLAG_GLOBAL_HEADER;
+				enc_cctx->flags |= AV_CODEC_FLAG_GLOBAL_HEADER;
 		}
 	}
 	
@@ -1244,6 +1272,7 @@ int main(int argc, char **argv) {
 	}
 	
 	// start processing the input
+	int current_percent = -1;
 	pr->stop_reading = 0;
 	while (!pr->stop_reading) {
 		unsigned int stream_index;
@@ -1255,11 +1284,25 @@ int main(int argc, char **argv) {
 			break;
 		}
 		
-		if (pr->in_fctx->streams[packet.stream_index]->codec->codec_type == AVMEDIA_TYPE_VIDEO)
+		if (pr->in_fctx->streams[packet.stream_index]->codec->codec_type == AVMEDIA_TYPE_VIDEO) {
 			pr->video_packets_read++;
-		else
+			if (max_framecount > 0) {
+				int percent = ((pr->video_packets_read) * 100) / max_framecount;
+				
+				if (percent > current_percent) {
+					if (current_percent >= 0) {
+						// move cursor up one line, erase line, return cursor to first column
+						printf("\033[A\33[2K\r");
+					}
+					
+					fprintf(stdout, "processed %03d percent of all frames\n", percent);
+					fflush(stdout);
+					current_percent = percent;
+				}
+			}
+		} else {
 			pr->other_packets_read++;
-		
+		}
 		// calculate output stream_index from packet's input stream_index
 		for (i=0; i<pr->n_stream_ids; i++) {
 			if (pr->stream_ids[i] == packet.stream_index) {
@@ -1297,7 +1340,7 @@ int main(int argc, char **argv) {
 	
 	// if no more packet can be read, there might be still data in the queues, hence flush them if necessary
 	for (j = 0; j < pr->n_stream_ids; j++) {
-		if (!pr->out_fctx->streams[j]->codec->codec || !(pr->out_fctx->streams[j]->codec->codec->capabilities & CODEC_CAP_DELAY))
+		if (!pr->out_fctx->streams[j]->codec->codec || !(pr->out_fctx->streams[j]->codec->codec->capabilities & AV_CODEC_CAP_DELAY))
 			continue;
 		
 		while (1) {

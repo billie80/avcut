@@ -2,7 +2,7 @@
 -include local.mk
 
 APP=avcut
-AVCUT_VERSION=0.3
+AVCUT_VERSION=0.4
 
 ifneq ($(CROSS_COMPILE),)
 	CC=$(CROSS_COMPILE)gcc
@@ -13,6 +13,7 @@ else
 endif
 
 CFLAGS+=-Wall -DAVCUT_VERSION=\"$(AVCUT_VERSION)\"
+CFLAGS+=$(shell for x in libavcodec libavformat libavutil; do $(PKG_CONFIG) --cflags $(PC_FLAGS) "$$x"; done)
 LDLIBS+=$(shell for x in libavcodec libavformat libavutil; do $(PKG_CONFIG) --libs $(PC_FLAGS) "$$x"; done)
 
 ### enable support for libav (EXPERIMENTAL)
@@ -40,6 +41,7 @@ clean:
 install: $(APP)
 	mkdir -p "$(DESTDIR)$(PREFIX)/bin"
 	install -m 755 avcut "$(DESTDIR)$(PREFIX)/bin/"
+	mkdir -p "$(DESTDIR)$(PREFIX)/share/doc/$(APP)/"
 	install -m 644 README.md "$(DESTDIR)$(PREFIX)/share/doc/$(APP)/"
 	
 	mkdir -p $(DESTDIR)$(AVCUT_PROFILE_DIRECTORY)
